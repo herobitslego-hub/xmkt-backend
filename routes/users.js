@@ -240,7 +240,7 @@ if (firebaseAdmin && typeof firebaseAdmin.auth === "function") {
       message: "Failed to create user in Firebase",
       error: fbErr.message,
     });
-  }
+  } 
 } else {
   console.log("⚠️ Firebase not configured, skipping Firebase user creation");
 }
@@ -253,17 +253,17 @@ if (firebaseAdmin && typeof firebaseAdmin.auth === "function") {
 
     // Save user in MongoDB, including Firebase UID
     const user = await User.create({
-      name: String(name).trim(),
-      email: normalizedEmail,
-      passwordHash,
-      phone: String(phone).trim(),
-      image,
-      isAdmin,
-      firebaseUid: firebaseUser.uid,
-      isEmailVerified: false,
-      emailVerificationTokenHash: tokenHash,
-      emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
-    });
+    name: String(name).trim(),
+    email: normalizedEmail,
+    passwordHash,
+    phone: String(phone).trim(),
+    image,
+    isAdmin,
+    firebaseUid: firebaseUser ? firebaseUser.uid : undefined,
+    isEmailVerified: false,
+    emailVerificationTokenHash: tokenHash,
+    emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
+  });
 
     try {
       await sendVerificationEmail(user, rawVerificationToken);
