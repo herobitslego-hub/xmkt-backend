@@ -193,12 +193,17 @@ function buildDeactivationMessage(user) {
 router.post("/register", upload.single("image"), async (req, res) => {
   try {
     // Log Firebase project ID to confirm correct project
-    try {
-      const projectId = firebaseAdmin.app().options.credential.projectId || firebaseAdmin.app().options.projectId;
-      console.log(`[Firebase] Using project: ${projectId}`);
-    } catch (projErr) {
-      console.log('[Firebase] Could not determine project ID:', projErr.message);
-    }
+   try {
+  if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+    const app = firebaseAdmin.app();
+    const projectId = app.options?.projectId || app.options?.credential?.projectId;
+    console.log(`[Firebase] Using project: ${projectId || "unknown"}`);
+  } else {
+    console.log("[Firebase] Not initialized");
+  }
+} catch (projErr) {
+  console.log("[Firebase] Could not determine project ID:", projErr.message);
+}
     const { name, email, password, phone } = req.body;
     const isAdmin = toBoolean(req.body.isAdmin);
 
@@ -213,24 +218,32 @@ router.post("/register", upload.single("image"), async (req, res) => {
     }
 
 
-    // Create user in Firebase Authentication
-    let firebaseUser;
-    let firebasePayload = {
-      email: normalizedEmail,
-      password: String(password),
-      displayName: String(name).trim(),
-    };
-    // Try to add phoneNumber if it looks like E.164 format
-    const phoneTrimmed = String(phone).trim();
-    if (/^\+\d{10,15}$/.test(phoneTrimmed)) {
-      firebasePayload.phoneNumber = phoneTrimmed;
-    }
-    try {
-      firebaseUser = await firebaseAdmin.auth().createUser(firebasePayload);
-    } catch (fbErr) {
-      console.error("[Firebase Register Error]", fbErr.message, fbErr);
-      return res.status(500).json({ message: "Failed to create user in Firebase", error: fbErr.message });
-    }
+    // Create user in Firebase Authentication only if Firebase is configured
+let firebaseUser = null;
+const firebasePayload = {
+  email: normalizedEmail,
+  password: String(password),
+  displayName: String(name).trim(),
+};
+
+const phoneTrimmed = String(phone).trim();
+if (/^\+\d{10,15}$/.test(phoneTrimmed)) {
+  firebasePayload.phoneNumber = phoneTrimmed;
+}
+
+if (firebaseAdmin && typeof firebaseAdmin.auth === "function") {
+  try {
+    firebaseUser = await firebaseAdmin.auth().createUser(firebasePayload);
+  } catch (fbErr) {
+    console.error("[Firebase Register Error]", fbErr.message, fbErr);
+    return res.status(500).json({
+      message: "Failed to create user in Firebase",
+      error: fbErr.message,
+    });
+  }
+} else {
+  console.log("⚠️ Firebase not configured, skipping Firebase user creation");
+}
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const image = req.file ? req.file.path : "";
