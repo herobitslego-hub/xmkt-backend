@@ -1,17 +1,24 @@
 const admin = require("firebase-admin");
 
-if (!admin.apps.length) {
+let firebaseAdmin = null;
+
+try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    }
 
+    firebaseAdmin = admin;
     console.log("🔥 Firebase initialized from ENV");
   } else {
     console.log("⚠️ Firebase not configured");
   }
+} catch (err) {
+  console.log("⚠️ Firebase init failed:", err.message);
 }
 
-module.exports = admin;
+module.exports = firebaseAdmin;

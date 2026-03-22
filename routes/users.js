@@ -218,8 +218,7 @@ router.post("/register", upload.single("image"), async (req, res) => {
     }
 
 
-    // Create user in Firebase Authentication only if Firebase is configured
-let firebaseUser = null;
+    let firebaseUser = null;
 const firebasePayload = {
   email: normalizedEmail,
   password: String(password),
@@ -231,7 +230,7 @@ if (/^\+\d{10,15}$/.test(phoneTrimmed)) {
   firebasePayload.phoneNumber = phoneTrimmed;
 }
 
-if (firebaseAdmin && typeof firebaseAdmin.auth === "function") {
+if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
   try {
     firebaseUser = await firebaseAdmin.auth().createUser(firebasePayload);
   } catch (fbErr) {
@@ -240,7 +239,7 @@ if (firebaseAdmin && typeof firebaseAdmin.auth === "function") {
       message: "Failed to create user in Firebase",
       error: fbErr.message,
     });
-  } 
+  }
 } else {
   console.log("⚠️ Firebase not configured, skipping Firebase user creation");
 }
@@ -300,19 +299,15 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Try to verify credentials with Firebase Authentication
-    let firebaseUser;
-    try {
-      // Firebase Admin does not support password verification directly.
-      // In production, you should verify the password on the client using Firebase SDK,
-      // then send the ID token to the backend for verification.
-      // For demonstration, fallback to local password check for now.
-      // Optionally, you can use a custom endpoint to verify with Firebase REST API.
-      firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-    } catch (fbErr) {
-      // If user not found in Firebase, treat as invalid
-      return res.status(401).json({ message: "Invalid credentials (Firebase)" });
-    }
+    // Firebase lookup only if Firebase is initialized
+let firebaseUser = null;
+if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+  try {
+    firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+  } catch (fbErr) {
+    return res.status(401).json({ message: "Invalid credentials (Firebase)" });
+  }
+}
 
     // Local password check (since Firebase Admin cannot check password)
     const passwordMatches = await bcrypt.compare(String(password), user.passwordHash);
@@ -734,13 +729,13 @@ router.delete("/:id([0-9a-fA-F]{24})", authJwt, async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    if (user.firebaseUid) {
-      try {
-        await firebaseAdmin.auth().deleteUser(user.firebaseUid);
-      } catch (fbErr) {
-        console.error("[Delete] Firebase delete error:", fbErr.message);
-      }
-    }
+  if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+  try {
+    await firebaseAdmin.auth().deleteUser(user.firebaseUid);
+  } catch (fbErr) {
+    console.error("[Delete] Firebase delete error:", fbErr.message);
+  }
+}
 
     await User.findByIdAndDelete(req.params.id);
 
@@ -842,13 +837,13 @@ router.delete("/me", authJwt, async (req, res) => {
     }
 
     // Best-effort Firebase account cleanup if linked
-    if (user.firebaseUid) {
-      try {
-        await firebaseAdmin.auth().deleteUser(user.firebaseUid);
-      } catch (_e) {
-        // Ignore Firebase errors here so account action can proceed
-      }
-    }
+   if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+  try {
+    await firebaseAdmin.auth().deleteUser(user.firebaseUid);
+  } catch (_e) {
+    // Ignore Firebase errors here so account action can proceed
+  }
+}
 
     const suffix = `${Date.now()}-${String(user._id).slice(-6)}`;
     user.name = `Deleted User ${suffix}`;
@@ -990,17 +985,17 @@ router.post('/google-login', async (req, res) => {
     let firebaseUser = null;
 
     if (!user) {
-      if (firebaseAdmin) {
-        try {
-          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-        } catch (_e) {
-          firebaseUser = await firebaseAdmin.auth().createUser({
-            email: normalizedEmail,
-            displayName: name || normalizedEmail,
-            photoURL: picture || undefined,
-          });
-        }
-      }
+  if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+    try {
+      firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+    } catch (_e) {
+      firebaseUser = await firebaseAdmin.auth().createUser({
+        email: normalizedEmail,
+        displayName: name || normalizedEmail,
+        photoURL: picture || undefined,
+      });
+    }
+  }
 
       user = await User.create({
         name: name || normalizedEmail,
@@ -1014,14 +1009,14 @@ router.post('/google-login', async (req, res) => {
         emailVerifiedAt: new Date(),
       });
     } else {
-      if (!user.firebaseUid && firebaseAdmin) {
-        try {
-          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-          user.firebaseUid = firebaseUser.uid;
-        } catch (_e) {
-          // ignore Firebase linking errors for now
-        }
-      }
+     if (!user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+  try {
+    firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+    user.firebaseUid = firebaseUser.uid;
+  } catch (_e) {
+    // ignore Firebase linking errors for now
+  }
+}
 
       if (user.isEmailVerified !== true) {
         user.isEmailVerified = true;
