@@ -31,7 +31,7 @@ const transporter = nodemailer.createTransport({
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const MAIL_FROM = process.env.MAIL_FROM || 'noreply@XMKT.com';
 
-function emailShell({ title, subtitle, bodyHtml, accent = "#7c3aed" }) {
+function emailShell({ title, subtitle, bodyHtml, accent = "#b8e3e9" }) {
   return `
     <!DOCTYPE html>
     <html>
@@ -78,7 +78,7 @@ async function sendVerificationEmail(user, rawToken) {
   const bodyHtml = `
     <p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#2a1b4f;">Hi ${user.name || "there"}, verify your email to activate your XMKT account.</p>
     <p style="margin:0 0 16px;">
-      <a href="${verificationUrl}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:11px 16px;border-radius:10px;font-weight:700;">Verify Email</a>
+      <a href="${verificationUrl}" style="display:inline-block;background:#b8e3e9;color:#fff;text-decoration:none;padding:11px 16px;border-radius:10px;font-weight:700;">Verify Email</a>
     </p>
     <p style="margin:0 0 10px;font-size:13px;color:#6b5d95;">If the button does not work, copy this link:</p>
     <p style="margin:0;padding:10px;border-radius:8px;background:#f5f3ff;color:#5b21b6;font-size:12px;word-break:break-all;">${verificationUrl}</p>
@@ -93,7 +93,7 @@ async function sendVerificationEmail(user, rawToken) {
       title: "Verify your email",
       subtitle: "One step left before you can log in.",
       bodyHtml,
-      accent: "#7c3aed",
+      accent: "#b8e3e9",
     }),
   };
 
@@ -113,7 +113,7 @@ async function sendAccountStatusEmail({ user, action, reason }) {
       Your account has been ${isDelete ? "deleted" : "deactivated"} by an administrator.
     </p>
     <div style="border:1px solid #e9d5ff;background:#faf5ff;border-radius:12px;padding:12px;">
-      <div style="font-size:12px;color:#7c3aed;font-weight:700;text-transform:uppercase;letter-spacing:.4px;">Reason</div>
+      <div style="font-size:12px;color:#b8e3e9;font-weight:700;text-transform:uppercase;letter-spacing:.4px;">Reason</div>
       <div style="margin-top:6px;font-size:14px;color:#3b2c63;">${safeReason}</div>
     </div>
     <p style="margin:14px 0 0;font-size:13px;color:#6b5d95;">If you think this is a mistake, contact support.</p>
@@ -955,37 +955,44 @@ router.post('/google-login', async (req, res) => {
       return res.status(400).json({ message: 'idToken is required' });
     }
 
-    // Verify Google ID token
+    if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID === '<YOUR_GOOGLE_CLIENT_ID>') {
+      return res.status(500).json({ message: 'GOOGLE_CLIENT_ID is not configured' });
+    }
+
     const ticket = await googleClient.verifyIdToken({
       idToken,
       audience: GOOGLE_CLIENT_ID,
     });
+
     const payload = ticket.getPayload();
-    const { email, name, picture, sub } = payload;
+    const { email, name, picture } = payload || {};
+
     if (!email) {
       return res.status(400).json({ message: 'Google account must have an email' });
     }
+
     const normalizedEmail = String(email).trim().toLowerCase();
 
-    // Check if user exists in MongoDB
     let user = await User.findOne({ email: normalizedEmail });
-    let firebaseUser;
+    let firebaseUser = null;
+
     if (!user) {
-      // Create user in Firebase Auth if not exists
-      try {
-        firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-      } catch (e) {
-        firebaseUser = await firebaseAdmin.auth().createUser({
-          email: normalizedEmail,
-          displayName: name,
-          photoURL: picture,
-        });
+      if (firebaseAdmin) {
+        try {
+          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+        } catch (_e) {
+          firebaseUser = await firebaseAdmin.auth().createUser({
+            email: normalizedEmail,
+            displayName: name || normalizedEmail,
+            photoURL: picture || undefined,
+          });
+        }
       }
-      // Save user in MongoDB
+
       user = await User.create({
         name: name || normalizedEmail,
         email: normalizedEmail,
-        passwordHash: '', // No password for Google users
+        passwordHash: '',
         phone: '',
         image: picture || '',
         isAdmin: false,
@@ -993,22 +1000,23 @@ router.post('/google-login', async (req, res) => {
         isEmailVerified: true,
         emailVerifiedAt: new Date(),
       });
-    } else if (!user.firebaseUid) {
-      // Link to Firebase if not already linked
-      try {
-        firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-        user.firebaseUid = firebaseUser.uid;
+    } else {
+      if (!user.firebaseUid && firebaseAdmin) {
+        try {
+          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+          user.firebaseUid = firebaseUser.uid;
+        } catch (_e) {
+          // ignore Firebase linking errors for now
+        }
+      }
+
+      if (user.isEmailVerified !== true) {
         user.isEmailVerified = true;
         user.emailVerifiedAt = user.emailVerifiedAt || new Date();
         user.emailVerificationTokenHash = null;
         user.emailVerificationExpiresAt = null;
-        await user.save();
-      } catch (e) {}
-    } else if (user.isEmailVerified !== true) {
-      user.isEmailVerified = true;
-      user.emailVerifiedAt = user.emailVerifiedAt || new Date();
-      user.emailVerificationTokenHash = null;
-      user.emailVerificationExpiresAt = null;
+      }
+
       await user.save();
     }
 
@@ -1031,17 +1039,23 @@ router.post('/google-login', async (req, res) => {
       }
     }
 
-    // Issue JWT
     const jwtPayload = {
       userId: user.id,
       email: user.email,
       isAdmin: user.isAdmin,
     };
-    const token = jwt.sign(jwtPayload, config.jwtSecret, { expiresIn: config.jwtExpiresIn });
+
+    const token = jwt.sign(jwtPayload, config.jwtSecret, {
+      expiresIn: config.jwtExpiresIn,
+    });
+
     return res.status(200).json({ token, user: jwtPayload });
   } catch (err) {
-    console.error('[POST /google-login] Error:', err.message);
-    return res.status(500).json({ message: 'Google login failed' });
+    console.error('[POST /google-login] Error:', err);
+    return res.status(500).json({
+      message: 'Google login failed',
+      error: err.message,
+    });
   }
 });
 

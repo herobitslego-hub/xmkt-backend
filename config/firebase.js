@@ -1,21 +1,24 @@
-let admin = null;
+let firebaseAdmin = null;
 
 try {
-  if (process.env.FCM_SERVICE_ACCOUNT_PATH) {
-    const serviceAccount = require(`../${process.env.FCM_SERVICE_ACCOUNT_PATH}`);
+  const admin = require("firebase-admin");
 
-    admin = require("firebase-admin");
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    }
 
-    console.log("✅ Firebase initialized");
+    firebaseAdmin = admin;
+    console.log("Firebase initialized");
   } else {
-    console.log("⚠️ Firebase not configured");
+    console.log("Firebase not configured");
   }
-} catch (error) {
-  console.log("⚠️ Firebase error:", error.message);
+} catch (err) {
+  console.log("Firebase disabled:", err.message);
 }
 
-module.exports = admin;
+module.exports = firebaseAdmin;
