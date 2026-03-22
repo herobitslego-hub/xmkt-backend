@@ -8,6 +8,7 @@ const authJwt = require("../middleware/authJwt");
 const User = require("../models/User");
 const Product = require("../models/Product");
 const upload = require("../helpers/upload");
+const transporter = require("../utils/mailer");
 
 
 const firebaseAdmin = require("../config/firebase");
@@ -29,7 +30,7 @@ const transporter = nodemailer.createTransport({
 });
 
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
-const MAIL_FROM = process.env.MAIL_FROM || 'noreply@XMKT.com';
+const MAIL_FROM = process.env.MAIL_FROM || process.env.MAIL_USERNAME;
 
 function emailShell({ title, subtitle, bodyHtml, accent = "#b8e3e9" }) {
   return `
@@ -84,20 +85,26 @@ async function sendVerificationEmail(user, rawToken) {
     <p style="margin:0;padding:10px;border-radius:8px;background:#f5f3ff;color:#5b21b6;font-size:12px;word-break:break-all;">${verificationUrl}</p>
     <p style="margin:14px 0 0;font-size:12px;color:#7e72a8;">This link expires in 24 hours.</p>
   `;
-  const mailOptions = {
-    from: MAIL_FROM,
-    to: user.email,
-    subject: "Verify your XMKT account",
-    text: `Hi ${user.name},\n\nPlease verify your email by opening this link:\n${verificationUrl}\n\nThis link will expire in 24 hours.`,
-    html: emailShell({
-      title: "Verify your email",
-      subtitle: "One step left before you can log in.",
-      bodyHtml,
-      accent: "#b8e3e9",
-    }),
-  };
+const mailOptions = {
+  from: MAIL_FROM,
+  to: user.email,
+  subject: "Verify your XMKT account",
+  text: `Hi ${user.name},\n\nPlease verify your email by opening this link:\n${verificationUrl}\n\nThis link will expire in 24 hours.`,
+  html: emailShell({
+    title: "Verify your email",
+    subtitle: "One step left before you can log in.",
+    bodyHtml,
+    accent: "#b8e3e9",
+  }),
+};
 
-  await transporter.sendMail(mailOptions);
+console.log("Sending verification email to:", user.email);
+
+try {
+  const info = await transporter.sendMail(mailOptions);
+  console.log(" Verification email sent:", info.response);
+} catch (mailErr) {
+  console.error(" Mail send error:", mailErr);
 }
 
 async function sendAccountStatusEmail({ user, action, reason }) {
