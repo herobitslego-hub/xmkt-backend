@@ -6,6 +6,7 @@ const User = require("../models/User");
 const Product = require("../models/Product");
 const VoucherClaim = require("../models/VoucherClaim");
 const { sendToTokens } = require("../services/notifications");
+const { sendDeliveryReceipt } = require("../services/email");
 
 const router = express.Router();
 
@@ -308,6 +309,15 @@ router.put("/:id", authJwt, async (req, res) => {
         console.log("[orders] Notification sent to user");
       } catch (err) {
         console.error("[orders] Error sending notification to user:", err);
+      }
+    }
+    
+    // If order was marked as delivered, send delivery receipt email
+      if (desiredStatus === STATUS.DELIVERED) {
+      try {
+        await sendDeliveryReceipt(updated);
+      } catch (err) {
+        console.error("[orders] sendDeliveryReceipt error:", err);
       }
     }
 
