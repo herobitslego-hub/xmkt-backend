@@ -2,31 +2,37 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const nodemailer = require("nodemailer");
+const { OAuth2Client } = require("google-auth-library");
 
 const config = require("../config");
 const authJwt = require("../middleware/authJwt");
 const User = require("../models/User");
 const Product = require("../models/Product");
 const upload = require("../helpers/upload");
-const transporter = require("../utils/mailer");
-
-
 const firebaseAdmin = require("../config/firebase");
+
 const router = express.Router();
-const { OAuth2Client } = require('google-auth-library');
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '<YOUR_GOOGLE_CLIENT_ID>';
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "<YOUR_GOOGLE_CLIENT_ID>";
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// Nodemailer setup (Mailtrap)
-const nodemailer = require('nodemailer');
 const transporter = nodemailer.createTransport({
   host: process.env.MAIL_HOST,
-  port: Number(process.env.MAIL_PORT || 2525),
-  secure: Number(process.env.MAIL_PORT || 2525) === 465,
+  port: Number(process.env.MAIL_PORT || 587),
+  secure: false,
   auth: {
     user: process.env.MAIL_USERNAME,
     pass: process.env.MAIL_PASSWORD,
   },
+});
+
+transporter.verify((error) => {
+  if (error) {
+    console.log("❌ Mailer verify error:", error);
+  } else {
+    console.log("✅ Mailer is ready");
+  }
 });
 
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -85,26 +91,29 @@ async function sendVerificationEmail(user, rawToken) {
     <p style="margin:0;padding:10px;border-radius:8px;background:#f5f3ff;color:#5b21b6;font-size:12px;word-break:break-all;">${verificationUrl}</p>
     <p style="margin:14px 0 0;font-size:12px;color:#7e72a8;">This link expires in 24 hours.</p>
   `;
-const mailOptions = {
-  from: MAIL_FROM,
-  to: user.email,
-  subject: "Verify your XMKT account",
-  text: `Hi ${user.name},\n\nPlease verify your email by opening this link:\n${verificationUrl}\n\nThis link will expire in 24 hours.`,
-  html: emailShell({
-    title: "Verify your email",
-    subtitle: "One step left before you can log in.",
-    bodyHtml,
-    accent: "#b8e3e9",
-  }),
-};
 
-console.log("Sending verification email to:", user.email);
+  const mailOptions = {
+    from: MAIL_FROM,
+    to: user.email,
+    subject: "Verify your XMKT account",
+    text: `Hi ${user.name},\n\nPlease verify your email by opening this link:\n${verificationUrl}\n\nThis link will expire in 24 hours.`,
+    html: emailShell({
+      title: "Verify your email",
+      subtitle: "One step left before you can log in.",
+      bodyHtml,
+      accent: "#b8e3e9",
+    }),
+  };
 
-try {
-  const info = await transporter.sendMail(mailOptions);
-  console.log(" Verification email sent:", info.response);
-} catch (mailErr) {
-  console.error(" Mail send error:", mailErr);
+  console.log("📨 Sending verification email to:", user.email);
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ Verification email sent:", info.response);
+  } catch (mailErr) {
+    console.error("❌ Mail send error:", mailErr);
+    throw mailErr;
+  }
 }
 
 async function sendAccountStatusEmail({ user, action, reason }) {
@@ -157,11 +166,11 @@ async function verifyEmailToken(rawToken) {
   user.emailVerifiedAt = new Date();
   await user.save();
 
-  if (user.firebaseUid) {
+  if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0 && user.firebaseUid) {
     try {
       await firebaseAdmin.auth().updateUser(user.firebaseUid, { emailVerified: true });
     } catch (_err) {
-      // Ignore Firebase sync failures so local verification still succeeds.
+      // Ignore Firebase sync failures
     }
   }
 
@@ -176,13 +185,8 @@ function toBoolean(value) {
 
 function parseDurationDays(value) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return null;
-  }
-  // Cap duration to 10 years to avoid accidental overflow.
-  if (parsed > 3650) {
-    return null;
-  }
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  if (parsed > 3650) return null;
   return parsed;
 }
 
@@ -199,18 +203,18 @@ function buildDeactivationMessage(user) {
 
 router.post("/register", upload.single("image"), async (req, res) => {
   try {
-    // Log Firebase project ID to confirm correct project
-   try {
-  if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-    const app = firebaseAdmin.app();
-    const projectId = app.options?.projectId || app.options?.credential?.projectId;
-    console.log(`[Firebase] Using project: ${projectId || "unknown"}`);
-  } else {
-    console.log("[Firebase] Not initialized");
-  }
-} catch (projErr) {
-  console.log("[Firebase] Could not determine project ID:", projErr.message);
-}
+    try {
+      if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+        const app = firebaseAdmin.app();
+        const projectId = app.options?.projectId || app.options?.credential?.projectId;
+        console.log(`[Firebase] Using project: ${projectId || "unknown"}`);
+      } else {
+        console.log("[Firebase] Not initialized");
+      }
+    } catch (projErr) {
+      console.log("[Firebase] Could not determine project ID:", projErr.message);
+    }
+
     const { name, email, password, phone } = req.body;
     const isAdmin = toBoolean(req.body.isAdmin);
 
@@ -224,32 +228,31 @@ router.post("/register", upload.single("image"), async (req, res) => {
       return res.status(409).json({ message: "Email already exists" });
     }
 
-
     let firebaseUser = null;
-const firebasePayload = {
-  email: normalizedEmail,
-  password: String(password),
-  displayName: String(name).trim(),
-};
+    const firebasePayload = {
+      email: normalizedEmail,
+      password: String(password),
+      displayName: String(name).trim(),
+    };
 
-const phoneTrimmed = String(phone).trim();
-if (/^\+\d{10,15}$/.test(phoneTrimmed)) {
-  firebasePayload.phoneNumber = phoneTrimmed;
-}
+    const phoneTrimmed = String(phone).trim();
+    if (/^\+\d{10,15}$/.test(phoneTrimmed)) {
+      firebasePayload.phoneNumber = phoneTrimmed;
+    }
 
-if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-  try {
-    firebaseUser = await firebaseAdmin.auth().createUser(firebasePayload);
-  } catch (fbErr) {
-    console.error("[Firebase Register Error]", fbErr.message, fbErr);
-    return res.status(500).json({
-      message: "Failed to create user in Firebase",
-      error: fbErr.message,
-    });
-  }
-} else {
-  console.log("⚠️ Firebase not configured, skipping Firebase user creation");
-}
+    if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+      try {
+        firebaseUser = await firebaseAdmin.auth().createUser(firebasePayload);
+      } catch (fbErr) {
+        console.error("[Firebase Register Error]", fbErr.message, fbErr);
+        return res.status(500).json({
+          message: "Failed to create user in Firebase",
+          error: fbErr.message,
+        });
+      }
+    } else {
+      console.log("⚠️ Firebase not configured, skipping Firebase user creation");
+    }
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const image = req.file ? req.file.path : "";
@@ -257,25 +260,26 @@ if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
     const rawVerificationToken = crypto.randomBytes(32).toString("hex");
     const tokenHash = hashVerificationToken(rawVerificationToken);
 
-    // Save user in MongoDB, including Firebase UID
     const user = await User.create({
-    name: String(name).trim(),
-    email: normalizedEmail,
-    passwordHash,
-    phone: String(phone).trim(),
-    image,
-    isAdmin,
-    firebaseUid: firebaseUser ? firebaseUser.uid : undefined,
-    isEmailVerified: false,
-    emailVerificationTokenHash: tokenHash,
-    emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
-  });
+      name: String(name).trim(),
+      email: normalizedEmail,
+      passwordHash,
+      phone: String(phone).trim(),
+      image,
+      isAdmin,
+      firebaseUid: firebaseUser ? firebaseUser.uid : undefined,
+      isEmailVerified: false,
+      emailVerificationTokenHash: tokenHash,
+      emailVerificationExpiresAt: new Date(Date.now() + EMAIL_TOKEN_TTL_MS),
+    });
 
     try {
       await sendVerificationEmail(user, rawVerificationToken);
     } catch (mailError) {
-      console.error('[Register] Verification email send error:', mailError.message);
-      return res.status(500).json({ message: "User created but failed to send verification email. Please try again." });
+      console.error("[Register] Verification email send error:", mailError.message);
+      return res.status(500).json({
+        message: "User created but failed to send verification email. Please try again.",
+      });
     }
 
     return res.status(201).json({
@@ -285,6 +289,7 @@ if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
       email: user.email,
     });
   } catch (error) {
+    console.error("[Register] Error:", error);
     return res.status(500).json({ message: "Failed to register user" });
   }
 });
@@ -297,7 +302,6 @@ router.post("/login", async (req, res) => {
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
-    // Try to get user from MongoDB
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(404).json({
@@ -306,17 +310,14 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Firebase lookup only if Firebase is initialized
-let firebaseUser = null;
-if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-  try {
-    firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-  } catch (fbErr) {
-    return res.status(401).json({ message: "Invalid credentials (Firebase)" });
-  }
-}
+    if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+      try {
+        await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+      } catch (_fbErr) {
+        return res.status(401).json({ message: "Invalid credentials (Firebase)" });
+      }
+    }
 
-    // Local password check (since Firebase Admin cannot check password)
     const passwordMatches = await bcrypt.compare(String(password), user.passwordHash);
     if (!passwordMatches) {
       return res.status(401).json({ message: "Invalid credentials" });
@@ -356,9 +357,9 @@ if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
     };
 
     const token = jwt.sign(payload, config.jwtSecret, { expiresIn: config.jwtExpiresIn });
-
     return res.status(200).json({ token, user: payload });
-  } catch (_error) {
+  } catch (error) {
+    console.error("[Login] Error:", error);
     return res.status(500).json({ message: "Failed to login" });
   }
 });
@@ -385,37 +386,49 @@ router.get("/verify-email", async (req, res) => {
   try {
     const token = String(req.query?.token || "").trim();
     if (!token) {
-      return res.status(400).send(emailShell({
-        title: "Missing token",
-        subtitle: "Open the full verification link from your email.",
-        bodyHtml: "<p style=\"margin:0;font-size:14px;color:#6b5d95;\">Please request a new verification email from the app if needed.</p>",
-        accent: "#ef4444",
-      }));
+      return res.status(400).send(
+        emailShell({
+          title: "Missing token",
+          subtitle: "Open the full verification link from your email.",
+          bodyHtml:
+            '<p style="margin:0;font-size:14px;color:#6b5d95;">Please request a new verification email from the app if needed.</p>',
+          accent: "#ef4444",
+        })
+      );
     }
 
     const result = await verifyEmailToken(token);
     if (!result.ok) {
-      return res.status(400).send(emailShell({
-        title: "Link expired or invalid",
-        subtitle: "Your verification link can only be used once and expires after 24 hours.",
-        bodyHtml: "<p style=\"margin:0;font-size:14px;color:#6b5d95;\">Please return to the app and tap Resend verification email.</p>",
-        accent: "#ef4444",
-      }));
+      return res.status(400).send(
+        emailShell({
+          title: "Link expired or invalid",
+          subtitle: "Your verification link can only be used once and expires after 24 hours.",
+          bodyHtml:
+            '<p style="margin:0;font-size:14px;color:#6b5d95;">Please return to the app and tap Resend verification email.</p>',
+          accent: "#ef4444",
+        })
+      );
     }
 
-    return res.status(200).send(emailShell({
-      title: "Email verified",
-      subtitle: "Your XMKT account is ready.",
-      bodyHtml: "<p style=\"margin:0;font-size:14px;color:#2a1b4f;\">You can now return to the app and log in.</p>",
-      accent: "#16a34a",
-    }));
+    return res.status(200).send(
+      emailShell({
+        title: "Email verified",
+        subtitle: "Your XMKT account is ready.",
+        bodyHtml:
+          '<p style="margin:0;font-size:14px;color:#2a1b4f;">You can now return to the app and log in.</p>',
+        accent: "#16a34a",
+      })
+    );
   } catch (_err) {
-    return res.status(500).send(emailShell({
-      title: "Verification failed",
-      subtitle: "Please try again shortly.",
-      bodyHtml: "<p style=\"margin:0;font-size:14px;color:#6b5d95;\">If this keeps happening, request a new verification email in the app.</p>",
-      accent: "#ef4444",
-    }));
+    return res.status(500).send(
+      emailShell({
+        title: "Verification failed",
+        subtitle: "Please try again shortly.",
+        bodyHtml:
+          '<p style="margin:0;font-size:14px;color:#6b5d95;">If this keeps happening, request a new verification email in the app.</p>',
+        accent: "#ef4444",
+      })
+    );
   }
 });
 
@@ -428,7 +441,10 @@ router.post("/resend-verification", async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(200).json({ success: true, message: "If that account exists, a verification email has been sent." });
+      return res.status(200).json({
+        success: true,
+        message: "If that account exists, a verification email has been sent.",
+      });
     }
 
     if (user.isEmailVerified === true) {
@@ -468,30 +484,14 @@ router.put("/profile", authJwt, async (req, res) => {
       }
     }
 
-    if (typeof updates.name === "string") {
-      updates.name = updates.name.trim();
-    }
-    if (typeof updates.phone === "string") {
-      updates.phone = updates.phone.trim();
-    }
-    if (typeof updates.deliveryAddress1 === "string") {
-      updates.deliveryAddress1 = updates.deliveryAddress1.trim();
-    }
-    if (typeof updates.deliveryAddress2 === "string") {
-      updates.deliveryAddress2 = updates.deliveryAddress2.trim();
-    }
-    if (typeof updates.deliveryCity === "string") {
-      updates.deliveryCity = updates.deliveryCity.trim();
-    }
-    if (typeof updates.deliveryRegion === "string") {
-      updates.deliveryRegion = updates.deliveryRegion.trim();
-    }
-    if (typeof updates.deliveryZip === "string") {
-      updates.deliveryZip = updates.deliveryZip.trim();
-    }
-    if (typeof updates.deliveryCountry === "string") {
-      updates.deliveryCountry = updates.deliveryCountry.trim();
-    }
+    if (typeof updates.name === "string") updates.name = updates.name.trim();
+    if (typeof updates.phone === "string") updates.phone = updates.phone.trim();
+    if (typeof updates.deliveryAddress1 === "string") updates.deliveryAddress1 = updates.deliveryAddress1.trim();
+    if (typeof updates.deliveryAddress2 === "string") updates.deliveryAddress2 = updates.deliveryAddress2.trim();
+    if (typeof updates.deliveryCity === "string") updates.deliveryCity = updates.deliveryCity.trim();
+    if (typeof updates.deliveryRegion === "string") updates.deliveryRegion = updates.deliveryRegion.trim();
+    if (typeof updates.deliveryZip === "string") updates.deliveryZip = updates.deliveryZip.trim();
+    if (typeof updates.deliveryCountry === "string") updates.deliveryCountry = updates.deliveryCountry.trim();
 
     if (updates.deliveryLocation) {
       const { latitude, longitude } = updates.deliveryLocation;
@@ -499,7 +499,9 @@ router.put("/profile", authJwt, async (req, res) => {
       const lng = Number(longitude);
 
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        return res.status(400).json({ message: "deliveryLocation must include numeric latitude and longitude" });
+        return res.status(400).json({
+          message: "deliveryLocation must include numeric latitude and longitude",
+        });
       }
 
       updates.deliveryLocation = { latitude: lat, longitude: lng };
@@ -516,7 +518,6 @@ router.put("/profile", authJwt, async (req, res) => {
   }
 });
 
-// GET /users/me/favorites — authenticated user favorite products
 router.get("/me/favorites", authJwt, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId)
@@ -539,7 +540,6 @@ router.get("/me/favorites", authJwt, async (req, res) => {
   }
 });
 
-// POST /users/me/favorites/:productId — add product to favorites
 router.post("/me/favorites/:productId", authJwt, async (req, res) => {
   try {
     const { productId } = req.params;
@@ -556,13 +556,16 @@ router.post("/me/favorites/:productId", authJwt, async (req, res) => {
       $addToSet: { favoriteProducts: product._id },
     });
 
-    return res.status(200).json({ success: true, productId: String(product._id), isFavorite: true });
+    return res.status(200).json({
+      success: true,
+      productId: String(product._id),
+      isFavorite: true,
+    });
   } catch (_err) {
     return res.status(500).json({ message: "Failed to add favorite" });
   }
 });
 
-// DELETE /users/me/favorites/:productId — remove product from favorites
 router.delete("/me/favorites/:productId", authJwt, async (req, res) => {
   try {
     const { productId } = req.params;
@@ -574,7 +577,11 @@ router.delete("/me/favorites/:productId", authJwt, async (req, res) => {
       $pull: { favoriteProducts: productId },
     });
 
-    return res.status(200).json({ success: true, productId: String(productId), isFavorite: false });
+    return res.status(200).json({
+      success: true,
+      productId: String(productId),
+      isFavorite: false,
+    });
   } catch (_err) {
     return res.status(500).json({ message: "Failed to remove favorite" });
   }
@@ -587,25 +594,18 @@ router.put("/profile-photo", authJwt, upload.single("image"), async (req, res) =
     }
 
     const image = req.file.path;
-
-    const user = await User.findByIdAndUpdate(
-      req.user.userId,
-      { image },
-      { new: true }
-    );
+    const user = await User.findByIdAndUpdate(req.user.userId, { image }, { new: true });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
     return res.status(200).json(user.toJSON());
-
-  } catch (error) {
+  } catch (_error) {
     return res.status(500).json({ message: "Failed to update profile photo" });
   }
 });
 
-// POST /users/push-token — add device push token to the current user's pushTokens array
 router.post("/push-token", authJwt, async (req, res) => {
   try {
     const { token, type } = req.body;
@@ -614,23 +614,25 @@ router.post("/push-token", authJwt, async (req, res) => {
     }
 
     const tokenType = type || (String(token).startsWith("ExponentPushToken") ? "expo" : "fcm");
-    console.log(`[POST /push-token] Saving ${tokenType} push token for user ${req.user.userId}: ${String(token).substring(0, 30)}...`);
+    console.log(
+      `[POST /push-token] Saving ${tokenType} push token for user ${req.user.userId}: ${String(token).substring(0, 30)}...`
+    );
 
-    // Remove any existing entry with the same token value, then add the new one
     await User.findByIdAndUpdate(req.user.userId, {
       $pull: { pushTokens: { token: String(token) } },
     });
+
     await User.findByIdAndUpdate(req.user.userId, {
       $push: { pushTokens: { token: String(token), type: tokenType } },
     });
+
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('[POST /push-token] Error:', error.message);
+    console.error("[POST /push-token] Error:", error.message);
     return res.status(500).json({ message: "Failed to save push token" });
   }
 });
 
-// DELETE /users/push-token — remove a specific push token on logout
 router.delete("/push-token", authJwt, async (req, res) => {
   try {
     const { token } = req.body;
@@ -639,39 +641,37 @@ router.delete("/push-token", authJwt, async (req, res) => {
         $pull: { pushTokens: { token: String(token) } },
       });
     } else {
-      // No specific token provided — clear all tokens for this user
       await User.findByIdAndUpdate(req.user.userId, { $set: { pushTokens: [] } });
     }
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('[DELETE /push-token] Error:', error.message);
+    console.error("[DELETE /push-token] Error:", error.message);
     return res.status(500).json({ message: "Failed to remove push token" });
   }
 });
 
-// GET /users — admin only, list all users
 router.get("/", authJwt, async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
       return res.status(403).json({ message: "Admin access required" });
     }
+
     const users = await User.find().sort({ createdAt: -1 }).lean();
-    // Use toJSON transform by calling it on each document is not available on lean()
-    // Strip sensitive fields manually
     const safe = users.map((u) => {
       const { passwordHash, pushTokens, _id, __v, ...rest } = u;
       return { ...rest, id: String(_id) };
     });
+
     return res.status(200).json(safe);
   } catch (_err) {
     return res.status(500).json({ message: "Failed to load users" });
   }
 });
 
-// PATCH /users/:id/deactivate — admin only
 router.patch("/:id([0-9a-fA-F]{24})/deactivate", authJwt, async (req, res) => {
   try {
     if (!req.user?.isAdmin) return res.status(403).json({ message: "Admin access required" });
+
     const reason = String(req.body?.reason || "").trim();
     const durationDays = parseDurationDays(req.body?.durationDays);
     if (!durationDays) {
@@ -690,12 +690,15 @@ router.patch("/:id([0-9a-fA-F]{24})/deactivate", authJwt, async (req, res) => {
       },
       { new: true }
     );
+
     if (!user) return res.status(404).json({ message: "User not found" });
+
     try {
       await sendAccountStatusEmail({ user, action: "deactivate", reason });
     } catch (mailErr) {
       console.error("[Deactivate] Email send error:", mailErr.message);
     }
+
     return res.status(200).json({
       success: true,
       isActive: false,
@@ -707,10 +710,10 @@ router.patch("/:id([0-9a-fA-F]{24})/deactivate", authJwt, async (req, res) => {
   }
 });
 
-// PATCH /users/:id/activate — admin only
 router.patch("/:id([0-9a-fA-F]{24})/activate", authJwt, async (req, res) => {
   try {
     if (!req.user?.isAdmin) return res.status(403).json({ message: "Admin access required" });
+
     const user = await User.findByIdAndUpdate(
       req.params.id,
       {
@@ -722,6 +725,7 @@ router.patch("/:id([0-9a-fA-F]{24})/activate", authJwt, async (req, res) => {
       },
       { new: true }
     );
+
     if (!user) return res.status(404).json({ message: "User not found" });
     return res.status(200).json({ success: true, isActive: true });
   } catch (_err) {
@@ -729,30 +733,28 @@ router.patch("/:id([0-9a-fA-F]{24})/activate", authJwt, async (req, res) => {
   }
 });
 
-// DELETE /users/:id — admin only, hard delete from database
 router.delete("/:id([0-9a-fA-F]{24})", authJwt, async (req, res) => {
   try {
     if (!req.user?.isAdmin) return res.status(403).json({ message: "Admin access required" });
+
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-  if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-  try {
-    await firebaseAdmin.auth().deleteUser(user.firebaseUid);
-  } catch (fbErr) {
-    console.error("[Delete] Firebase delete error:", fbErr.message);
-  }
-}
+    if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+      try {
+        await firebaseAdmin.auth().deleteUser(user.firebaseUid);
+      } catch (fbErr) {
+        console.error("[Delete] Firebase delete error:", fbErr.message);
+      }
+    }
 
     await User.findByIdAndDelete(req.params.id);
-
     return res.status(200).json({ success: true });
   } catch (_err) {
     return res.status(500).json({ message: "Failed to delete user" });
   }
 });
 
-// PUT /users/change-password — authenticated user changes their own password
 router.put("/change-password", authJwt, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -788,13 +790,13 @@ router.put("/change-password", authJwt, async (req, res) => {
   }
 });
 
-// PATCH /users/me/deactivate — authenticated user self-deactivate
 router.patch("/me/deactivate", authJwt, async (req, res) => {
   try {
     const reason = String(req.body?.reason || "").trim();
     if (!reason) {
       return res.status(400).json({ message: "Reason is required" });
     }
+
     const durationDays = parseDurationDays(req.body?.durationDays);
     if (!durationDays) {
       return res.status(400).json({ message: "durationDays must be a positive whole number" });
@@ -830,7 +832,6 @@ router.patch("/me/deactivate", authJwt, async (req, res) => {
   }
 });
 
-// DELETE /users/me — authenticated user account deletion request
 router.delete("/me", authJwt, async (req, res) => {
   try {
     const reason = String(req.body?.reason || "").trim();
@@ -843,14 +844,13 @@ router.delete("/me", authJwt, async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Best-effort Firebase account cleanup if linked
-   if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-  try {
-    await firebaseAdmin.auth().deleteUser(user.firebaseUid);
-  } catch (_e) {
-    // Ignore Firebase errors here so account action can proceed
-  }
-}
+    if (user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+      try {
+        await firebaseAdmin.auth().deleteUser(user.firebaseUid);
+      } catch (_e) {
+        // Ignore Firebase errors
+      }
+    }
 
     const suffix = `${Date.now()}-${String(user._id).slice(-6)}`;
     user.name = `Deleted User ${suffix}`;
@@ -880,7 +880,6 @@ router.delete("/me", authJwt, async (req, res) => {
   }
 });
 
-// GET /users/admin/push-readiness — admin only, token count diagnostics per user
 router.get("/admin/push-readiness", authJwt, async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
@@ -903,9 +902,7 @@ router.get("/admin/push-readiness", authJwt, async (req, res) => {
       const fcmCount = entries.filter((t) => t?.type === "fcm").length;
       const unknownCount = entries.filter((t) => !t?.type || t?.type === "unknown").length;
 
-      if (tokenCount > 0) {
-        pushReadyCount += 1;
-      }
+      if (tokenCount > 0) pushReadyCount += 1;
       totalTokens += tokenCount;
 
       return {
@@ -940,7 +937,6 @@ router.get("/admin/push-readiness", authJwt, async (req, res) => {
   }
 });
 
-// GET /users/:id — must be LAST to avoid catching static routes like /profile-photo
 router.get("/:id", authJwt, async (req, res) => {
   try {
     const { id } = req.params;
@@ -962,16 +958,15 @@ router.get("/:id", authJwt, async (req, res) => {
   }
 });
 
-// Google Sign-In endpoint
-router.post('/google-login', async (req, res) => {
+router.post("/google-login", async (req, res) => {
   try {
     const { idToken } = req.body;
     if (!idToken) {
-      return res.status(400).json({ message: 'idToken is required' });
+      return res.status(400).json({ message: "idToken is required" });
     }
 
-    if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID === '<YOUR_GOOGLE_CLIENT_ID>') {
-      return res.status(500).json({ message: 'GOOGLE_CLIENT_ID is not configured' });
+    if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID === "<YOUR_GOOGLE_CLIENT_ID>") {
+      return res.status(500).json({ message: "GOOGLE_CLIENT_ID is not configured" });
     }
 
     const ticket = await googleClient.verifyIdToken({
@@ -983,7 +978,7 @@ router.post('/google-login', async (req, res) => {
     const { email, name, picture } = payload || {};
 
     if (!email) {
-      return res.status(400).json({ message: 'Google account must have an email' });
+      return res.status(400).json({ message: "Google account must have an email" });
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
@@ -992,38 +987,38 @@ router.post('/google-login', async (req, res) => {
     let firebaseUser = null;
 
     if (!user) {
-  if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-    try {
-      firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-    } catch (_e) {
-      firebaseUser = await firebaseAdmin.auth().createUser({
-        email: normalizedEmail,
-        displayName: name || normalizedEmail,
-        photoURL: picture || undefined,
-      });
-    }
-  }
+      if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+        try {
+          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+        } catch (_e) {
+          firebaseUser = await firebaseAdmin.auth().createUser({
+            email: normalizedEmail,
+            displayName: name || normalizedEmail,
+            photoURL: picture || undefined,
+          });
+        }
+      }
 
       user = await User.create({
         name: name || normalizedEmail,
         email: normalizedEmail,
-        passwordHash: '',
-        phone: '',
-        image: picture || '',
+        passwordHash: "",
+        phone: "",
+        image: picture || "",
         isAdmin: false,
         firebaseUid: firebaseUser ? firebaseUser.uid : undefined,
         isEmailVerified: true,
         emailVerifiedAt: new Date(),
       });
     } else {
-     if (!user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
-  try {
-    firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
-    user.firebaseUid = firebaseUser.uid;
-  } catch (_e) {
-    // ignore Firebase linking errors for now
-  }
-}
+      if (!user.firebaseUid && firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+        try {
+          firebaseUser = await firebaseAdmin.auth().getUserByEmail(normalizedEmail);
+          user.firebaseUid = firebaseUser.uid;
+        } catch (_e) {
+          // ignore Firebase linking errors
+        }
+      }
 
       if (user.isEmailVerified !== true) {
         user.isEmailVerified = true;
@@ -1066,9 +1061,9 @@ router.post('/google-login', async (req, res) => {
 
     return res.status(200).json({ token, user: jwtPayload });
   } catch (err) {
-    console.error('[POST /google-login] Error:', err);
+    console.error("[POST /google-login] Error:", err);
     return res.status(500).json({
-      message: 'Google login failed',
+      message: "Google login failed",
       error: err.message,
     });
   }
