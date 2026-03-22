@@ -8,8 +8,8 @@ try {
 
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else if (process.env.FCM_SERVICE_ACCOUNT_PATH) {
-    serviceAccount = require(path.resolve(process.cwd(), process.env.FCM_SERVICE_ACCOUNT_PATH));
+  } else {
+    serviceAccount = require(path.resolve(__dirname, "../firebase-service-account.json"));
   }
 
   if (serviceAccount) {
@@ -21,8 +21,6 @@ try {
 
     firebaseAdmin = admin;
     console.log("🔥 Firebase initialized");
-  } else {
-    console.log("⚠️ Firebase not configured");
   }
 } catch (err) {
   console.log("⚠️ Firebase init failed:", err.message);
